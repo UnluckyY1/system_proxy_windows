@@ -45,6 +45,16 @@ namespace system_proxy
     return result.c_str();
   }
 
+  std::wstring UTF8ToWide(const std::string &utf8Str)
+  {
+    if (utf8Str.empty())
+      return L"";
+    int size = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, nullptr, 0);
+    std::wstring result(size, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, &result[0], size);
+    return result.c_str();
+  }
+
   std::string GetFirstProxyFromString(const std::string &proxyStr)
   {
     std::istringstream stream(proxyStr);
