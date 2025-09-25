@@ -296,3 +296,4 @@ namespace system_proxy
       result->NotImplemented();
     }
   }
+} // namespace system_proxy
