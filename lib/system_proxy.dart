@@ -8,7 +8,7 @@ class SystemProxy {
 
   /// get system proxy
   /// Has fixed proxy, return: {port: 8899, host: 172.24.141.93}
-  /// Has automatic proxy (iOS only), return: {url: http://example.com/wpad.dat}
+  /// Has automatic proxy, return: {url: http://example.com/wpad.dat}
   /// no proxy, return: null
   ///
   static Future<Map<String, String>?> getProxySettings(

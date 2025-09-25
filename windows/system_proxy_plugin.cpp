@@ -35,6 +35,26 @@ namespace system_proxy
   SystemProxyPlugin::SystemProxyPlugin() {}
   SystemProxyPlugin::~SystemProxyPlugin() {}
 
+  // Helper function for formatted debug output
+  void DebugLog(const std::string &message)
+  {
+    OutputDebugStringA(("[SystemProxy] " + message + "\n").c_str());
+  }
+
+  void DebugLog(const std::wstring &message)
+  {
+    OutputDebugStringA("[SystemProxy] ");
+    OutputDebugStringW((message + L"\n").c_str());
+  }
+
+  template <typename... Args>
+  void DebugLogFormat(const char *format, Args... args)
+  {
+    char buffer[1024];
+    sprintf_s(buffer, sizeof(buffer), format, args...);
+    OutputDebugStringA(("[SystemProxy] " + std::string(buffer) + "\n").c_str());
+  }
+
   std::string WideToUTF8(LPCWSTR wideStr)
   {
     if (!wideStr)
@@ -87,6 +107,8 @@ namespace system_proxy
     ZeroMemory(&options, sizeof(options));
     ZeroMemory(&proxyInfo, sizeof(proxyInfo));
 
+    DebugLog("Initializing proxy detection...");
+
     // 2. Open WinHTTP session
     hSession = WinHttpOpen(L"Flutter System Proxy/1.0",
                            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -95,9 +117,13 @@ namespace system_proxy
                            0);
     if (!hSession)
     {
-      printf("WinHttpOpen failed: %lu\n", GetLastError());
+      DWORD error = GetLastError();
+      DebugLogFormat("WinHttpOpen failed: %lu", error);
       return "";
     }
+
+    // Set timeouts to avoid hanging
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
 
     // 3. Configure PAC/auto-detection with error handling
     HKEY hKey = nullptr;
@@ -120,7 +146,7 @@ namespace system_proxy
         options.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL;
         options.lpszAutoConfigUrl = pacUrl;
         options.fAutoLogonIfChallenged = TRUE;
-        printf("Using PAC URL: %ls\n", pacUrl);
+        DebugLogFormat("Using PAC URL: %ls", pacUrl);
       }
       else
       {
@@ -128,7 +154,7 @@ namespace system_proxy
         options.dwFlags = WINHTTP_AUTOPROXY_AUTO_DETECT;
         options.dwAutoDetectFlags = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
         options.fAutoLogonIfChallenged = TRUE;
-        printf("Using auto-detection\n");
+        DebugLog("Using auto-detection");
       }
       RegCloseKey(hKey);
     }
@@ -138,12 +164,12 @@ namespace system_proxy
       options.dwFlags = WINHTTP_AUTOPROXY_AUTO_DETECT;
       options.dwAutoDetectFlags = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
       options.fAutoLogonIfChallenged = TRUE;
-      printf("Registry open failed, using auto-detection\n");
+      DebugLog("Registry open failed, using auto-detection");
     }
 
     // 4. Convert target URL to wide string
     std::wstring wideTargetUrl = UTF8ToWide(targetUrl);
-    printf("Getting proxy for: %ls\n", wideTargetUrl.c_str());
+    DebugLogFormat("Getting proxy for: %ls", wideTargetUrl.c_str());
 
     // 5. Get proxy configuration for target URL
     BOOL success = WinHttpGetProxyForUrl(hSession, wideTargetUrl.c_str(),
@@ -154,13 +180,13 @@ namespace system_proxy
       if (proxyInfo.lpszProxy && proxyInfo.lpszProxy[0] != L'\0')
       {
         std::string proxyStr = WideToUTF8(proxyInfo.lpszProxy);
-        printf("Proxy found: %s\n", proxyStr.c_str());
+        DebugLogFormat("Proxy found: %s", proxyStr.c_str());
         proxyResult = GetFirstProxyFromString(proxyStr);
         GlobalFree(proxyInfo.lpszProxy);
       }
       else
       {
-        printf("No proxy required (DIRECT)\n");
+        DebugLog("No proxy required (DIRECT)");
       }
 
       if (proxyInfo.lpszProxyBypass)
@@ -171,25 +197,43 @@ namespace system_proxy
     else
     {
       DWORD error = GetLastError();
-      printf("WinHttpGetProxyForUrl failed: %lu\n", error);
+      DebugLogFormat("WinHttpGetProxyForUrl failed: %lu", error);
 
       // Common error codes for debugging
       if (error == ERROR_WINHTTP_AUTODETECTION_FAILED)
       {
-        printf("Auto-detection failed\n");
+        DebugLog("Auto-detection failed");
       }
       else if (error == ERROR_WINHTTP_BAD_AUTO_PROXY_SCRIPT)
       {
-        printf("Bad PAC script\n");
+        DebugLog("Bad PAC script");
       }
       else if (error == ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT)
       {
-        printf("Unable to download PAC script\n");
+        DebugLog("Unable to download PAC script");
+      }
+      else if (error == ERROR_WINHTTP_LOGIN_FAILURE)
+      {
+        DebugLog("Proxy authentication required");
+      }
+      else if (error == ERROR_WINHTTP_TIMEOUT)
+      {
+        DebugLog("Proxy detection timeout");
       }
     }
 
     // 6. Cleanup
     WinHttpCloseHandle(hSession);
+
+    if (proxyResult.empty())
+    {
+      DebugLog("Proxy detection completed: No proxy (DIRECT)");
+    }
+    else
+    {
+      DebugLogFormat("Proxy detection completed: %s", proxyResult.c_str());
+    }
+
     return proxyResult;
   }
 
@@ -199,7 +243,7 @@ namespace system_proxy
   {
     if (method_call.method_name() == "getProxySettings")
     {
-      printf("=== getProxySettings called ===\n");
+      DebugLog("=== getProxySettings called ===");
 
       // Set default URL
       std::string targetUrl = "https://www.microsoft.com";
@@ -213,11 +257,11 @@ namespace system_proxy
         if (urlIt != arguments->end())
         {
           targetUrl = std::get<std::string>(urlIt->second);
-          printf("Custom target URL: %s\n", targetUrl.c_str());
+          DebugLogFormat("Custom target URL: %s", targetUrl.c_str());
         }
         else
         {
-          printf("Using default URL: %s\n", targetUrl.c_str());
+          DebugLogFormat("Using default URL: %s", targetUrl.c_str());
         }
       }
 
@@ -225,13 +269,13 @@ namespace system_proxy
       WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ieConfig = {0};
       BOOL hasIEConfig = WinHttpGetIEProxyConfigForCurrentUser(&ieConfig);
 
-      printf("WinHttpGetIEProxyConfigForCurrentUser: %s\n", hasIEConfig ? "SUCCESS" : "FAILED");
+      DebugLogFormat("WinHttpGetIEProxyConfigForCurrentUser: %s", hasIEConfig ? "SUCCESS" : "FAILED");
 
       // 1. Get AutoConfig URL (PAC file)
       if (hasIEConfig && ieConfig.lpszAutoConfigUrl)
       {
         std::string autoConfigUrl = WideToUTF8(ieConfig.lpszAutoConfigUrl);
-        printf("IE AutoConfigURL: %s\n", autoConfigUrl.c_str());
+        DebugLogFormat("IE AutoConfigURL: %s", autoConfigUrl.c_str());
         proxyData[flutter::EncodableValue("autoConfigUrl")] =
             flutter::EncodableValue(autoConfigUrl);
         GlobalFree(ieConfig.lpszAutoConfigUrl);
@@ -239,61 +283,47 @@ namespace system_proxy
 
       // 2. Get effective proxy using WinHTTP
       std::string effectiveProxy = GetEffectiveProxy(targetUrl);
-      printf("Effective proxy result: %s\n", effectiveProxy.c_str());
+      DebugLogFormat("Effective proxy result: %s", effectiveProxy.c_str());
 
       // 3. Fallback to IE proxy if WinHTTP detection failed
       if (effectiveProxy.empty() && hasIEConfig && ieConfig.lpszProxy)
       {
         std::string ieProxy = WideToUTF8(ieConfig.lpszProxy);
-        printf("Fallback to IE proxy: %s\n", ieProxy.c_str());
+        DebugLogFormat("Fallback to IE proxy: %s", ieProxy.c_str());
         effectiveProxy = GetFirstProxyFromString(ieProxy);
         GlobalFree(ieConfig.lpszProxy);
       }
 
-      // 4. Set proxy value if found  ← THIS WAS MISSING!
+      // 4. Set proxy value if found
       if (!effectiveProxy.empty())
       {
         proxyData[flutter::EncodableValue("proxy")] =
             flutter::EncodableValue(effectiveProxy);
-        printf("Final proxy set: %s\n", effectiveProxy.c_str());
+        DebugLogFormat("Final proxy set: %s", effectiveProxy.c_str());
       }
       else
       {
-        printf("No proxy configured (DIRECT connection)\n");
+        DebugLog("No proxy configured (DIRECT connection)");
       }
 
       // 5. Get proxy bypass list
       if (hasIEConfig && ieConfig.lpszProxyBypass)
       {
         std::string proxyBypass = WideToUTF8(ieConfig.lpszProxyBypass);
-        printf("Proxy bypass: %s\n", proxyBypass.c_str());
+        DebugLogFormat("Proxy bypass: %s", proxyBypass.c_str());
         proxyData[flutter::EncodableValue("proxyBypass")] =
             flutter::EncodableValue(proxyBypass);
         GlobalFree(ieConfig.lpszProxyBypass);
       }
 
-      // 6. Cleanup any remaining IE config memory
-      if (hasIEConfig)
-      {
-        // Ensure all allocated strings are freed
-        if (ieConfig.lpszProxy && !effectiveProxy.empty())
-        {
-          // Already freed above in fallback, but if not used, free it now
-          GlobalFree(ieConfig.lpszProxy);
-        }
-        if (ieConfig.lpszProxyBypass)
-        {
-          // Already freed above, but double-check
-          GlobalFree(ieConfig.lpszProxyBypass);
-        }
-      }
-
-      printf("Returning proxy data with %zu entries\n", proxyData.size());
+      DebugLogFormat("Returning proxy data with %zu entries", proxyData.size());
       result->Success(proxyData);
     }
     else
     {
+      DebugLogFormat("Unknown method called: %s", method_call.method_name().c_str());
       result->NotImplemented();
     }
   }
+
 } // namespace system_proxy
