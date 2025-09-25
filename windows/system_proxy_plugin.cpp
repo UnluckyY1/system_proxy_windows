@@ -227,28 +227,68 @@ namespace system_proxy
 
       printf("WinHttpGetIEProxyConfigForCurrentUser: %s\n", hasIEConfig ? "SUCCESS" : "FAILED");
 
-      if (hasIEConfig)
+      // 1. Get AutoConfig URL (PAC file)
+      if (hasIEConfig && ieConfig.lpszAutoConfigUrl)
       {
-        if (ieConfig.lpszAutoConfigUrl)
-        {
-          std::string autoConfigUrl = WideToUTF8(ieConfig.lpszAutoConfigUrl);
-          printf("IE AutoConfigURL: %s\n", autoConfigUrl.c_str());
-          proxyData[flutter::EncodableValue("autoConfigUrl")] =
-              flutter::EncodableValue(autoConfigUrl);
-          GlobalFree(ieConfig.lpszAutoConfigUrl);
-        }
-
-        if (ieConfig.lpszProxy)
-        {
-          printf("IE Proxy: %ls\n", ieConfig.lpszProxy);
-        }
+        std::string autoConfigUrl = WideToUTF8(ieConfig.lpszAutoConfigUrl);
+        printf("IE AutoConfigURL: %s\n", autoConfigUrl.c_str());
+        proxyData[flutter::EncodableValue("autoConfigUrl")] =
+            flutter::EncodableValue(autoConfigUrl);
+        GlobalFree(ieConfig.lpszAutoConfigUrl);
       }
 
+      // 2. Get effective proxy using WinHTTP
       std::string effectiveProxy = GetEffectiveProxy(targetUrl);
       printf("Effective proxy result: %s\n", effectiveProxy.c_str());
 
-      // ... rest of the code unchanged but with more logs ...
+      // 3. Fallback to IE proxy if WinHTTP detection failed
+      if (effectiveProxy.empty() && hasIEConfig && ieConfig.lpszProxy)
+      {
+        std::string ieProxy = WideToUTF8(ieConfig.lpszProxy);
+        printf("Fallback to IE proxy: %s\n", ieProxy.c_str());
+        effectiveProxy = GetFirstProxyFromString(ieProxy);
+        GlobalFree(ieConfig.lpszProxy);
+      }
 
+      // 4. Set proxy value if found  ← THIS WAS MISSING!
+      if (!effectiveProxy.empty())
+      {
+        proxyData[flutter::EncodableValue("proxy")] =
+            flutter::EncodableValue(effectiveProxy);
+        printf("Final proxy set: %s\n", effectiveProxy.c_str());
+      }
+      else
+      {
+        printf("No proxy configured (DIRECT connection)\n");
+      }
+
+      // 5. Get proxy bypass list
+      if (hasIEConfig && ieConfig.lpszProxyBypass)
+      {
+        std::string proxyBypass = WideToUTF8(ieConfig.lpszProxyBypass);
+        printf("Proxy bypass: %s\n", proxyBypass.c_str());
+        proxyData[flutter::EncodableValue("proxyBypass")] =
+            flutter::EncodableValue(proxyBypass);
+        GlobalFree(ieConfig.lpszProxyBypass);
+      }
+
+      // 6. Cleanup any remaining IE config memory
+      if (hasIEConfig)
+      {
+        // Ensure all allocated strings are freed
+        if (ieConfig.lpszProxy && !effectiveProxy.empty())
+        {
+          // Already freed above in fallback, but if not used, free it now
+          GlobalFree(ieConfig.lpszProxy);
+        }
+        if (ieConfig.lpszProxyBypass)
+        {
+          // Already freed above, but double-check
+          GlobalFree(ieConfig.lpszProxyBypass);
+        }
+      }
+
+      printf("Returning proxy data with %zu entries\n", proxyData.size());
       result->Success(proxyData);
     }
     else
@@ -256,5 +296,3 @@ namespace system_proxy
       result->NotImplemented();
     }
   }
-
-} // namespace system_proxy
